@@ -1,0 +1,67 @@
+pipeline {
+  agent {
+    label 'docker'
+  }
+  options{
+    timeout(time: 1, unit: 'HOURS')
+    buildDiscarder(logRotator(numToKeepStr: '100'))
+  }
+stages {
+stage("Retrive Branch info To Build") {
+            steps {
+                    script {
+                        def gitBranches = sh(returnStdout: true, script: 'git rev-parse --abbrev-ref --all | sed s:origin/:: | sort -u')
+		            userInput = input(
+ 				id: 'userInput', message: 'Please Specify Values here?', parameters: [
+ 					[$class: 'ChoiceParameterDefinition',choices:gitBranches , description: 'Branch', name: 'branch'],
+ 					[$class: 'ChoiceParameterDefinition',choices: '2.0\n2.1', description: 'Version', name: 'version'],
+ 					[$class: 'ChoiceParameterDefinition',choices: 'http\nhttps', description: 'Please specify the protocol here.', name: 'protocol'],
+ 					[$class: 'StringParameterDefinition', defaultValue: "IP", description: 'Please specify the IP where you want to test this?', name: 'ip'],
+ 					[$class: 'StringParameterDefinition',defaultValue: "", description: 'Please specify the Port here', name: 'port'],
+ 					[$class: 'StringParameterDefinition',defaultValue:"" , description: "Please specify comma seperated list: a,b,c,d", name: 'endpoint'],
+ 					[$class: 'StringParameterDefinition',defaultValue: "", description: 'Please specify comma seperated list:a,b,c,d', name: 'validation'],
+ 					[$class: 'BooleanParameterDefinition',defaultValue: false, description: '', name: 'POST'],
+ 					[$class: 'BooleanParameterDefinition',defaultValue: true, description: '', name: 'GET'],
+ 					[$class: 'StringParameterDefinition',description: 'Please specify comma email list:firstname_lastname', name: 'email' ],
+				])	
+		    git branch: "${userInput['branch']}", credentialsId: 'Credentials_ID_VALUE*', url: 'git_repo_url'
+                    }
+                }
+            }
+    stage('Execute Automation Tests') {
+    steps {
+            
+            sh """
+                docker run -v \$(pwd):/code -w /code -e POST="${userInput['POST']}" -e endpoint="${userInput['endpoint']}" -e validation="${userInput['validation']}" -e port="${userInput['port']}" -e protocol="${userInput['protocol']}" -e ip="${userInput['ip']}" -e email="${userInput['email']}" -e GET="${userInput['GET']}" -e version="${userInput['version']}" -i docker_image_name bash run_automation.sh
+               """
+		}
+	}
+	
+    stage('Publish HTML Reports') {
+    steps {
+		publishHTML target: [
+            		allowMissing: false,
+            		alwaysLinkToLastBuild: false,
+            		keepAll: true,
+            		reportDir: 'reports',
+            		reportFiles: '*.html',
+            		reportName: 'Automation_Report'
+          	]
+		}
+	}
+    stage('Send Email Notification') {
+    steps {
+		emailext body: '''Please refer to the detailed test report at:
+				${BUILD_URL}/Automation_Report''', 
+				subject: "Test Suite Report [JENKINS STATUS: ${currentBuild.currentResult}]", 
+				to: "${userInput['email']}"
+          }
+      }
+    }
+   post {
+    always {
+      echo 'One way or another, I have finished'
+      step([$class: 'WsCleanup'])
+    }
+  }
+}
